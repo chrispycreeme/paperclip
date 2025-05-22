@@ -1,54 +1,39 @@
 <?php
-// Start the session to manage user login state
 session_start();
 
-// Enable error reporting for debugging
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-// Include the database connection file
 require_once 'db_connect.php';
 
-// Check if the user is logged in. If not, redirect to the login page.
 if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
     header("Location: login.php");
     exit;
 }
 
-// Get the dynamic student table name from the session
 $student_table_name = $_SESSION['student_table_name'] ?? null;
 
-// --- CRITICAL VALIDATION FOR TABLE NAME ---
-// This is to prevent SQL injection for table names.
-// Ensure the table name is exactly what you expect (e.g., 'students_teacher1', 'students_teacher2').
-// If it's not a valid table name, terminate the script to prevent database errors or security risks.
 $allowed_student_tables = [
-    'students_teacher1', // Add all your expected teacher-specific student table names here
+    'students_teacher1',
     'students_teacher2'
-    // Add more as you create new teacher accounts and their student tables
 ];
 
 if (!$student_table_name || !in_array($student_table_name, $allowed_student_tables)) {
-    // Log the error for server-side debugging
     error_log("Security Alert: Invalid or missing student_table_name in session. Value: " . ($student_table_name ?? 'NULL'));
     die("Error: Invalid student data configuration. Please contact support.");
 }
 
-// Handle POST requests for updating student exit codes
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_exit_code') {
     $lrn = trim($_POST['lrn'] ?? '');
     $newExitCode = trim($_POST['exit_code'] ?? '');
 
-    // --- ADD VALIDATION FOR SIX DIGITS HERE ---
     if (!preg_match('/^\d{6}$/', $newExitCode)) {
         echo json_encode(['status' => 'error', 'message' => 'Exit code must be exactly 6 digits.']);
         $mysqli->close();
         exit;
     }
-    // --- END ADDITION ---
 
-    // Prepare an UPDATE statement using the dynamic table name
     $sql = "UPDATE `" . $student_table_name . "` SET exit_code = ? WHERE lrn = ?";
 
     if ($stmt = $mysqli->prepare($sql)) {
@@ -60,13 +45,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 echo json_encode(['status' => 'error', 'message' => 'Student not found or no change made.']);
             }
         } else {
-            // Log the specific SQL error
             error_log("SQL Error (update_exit_code): " . $stmt->error);
             echo json_encode(['status' => 'error', 'message' => 'Error updating exit code: ' . $stmt->error]);
         }
         $stmt->close();
     } else {
-        // Log the specific SQL prepare error
         error_log("SQL Prepare Error (update_exit_code): " . $mysqli->error);
         echo json_encode(['status' => 'error', 'message' => 'Error preparing statement: ' . $mysqli->error]);
     }
@@ -74,17 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
-// Handle POST requests for updating 'flagged_as_cheater' status
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_flag_status') {
     $lrn = trim($_POST['lrn'] ?? '');
-    // Convert 'true'/'false' string from JS to PHP boolean
     $isFlagged = ($_POST['is_flagged'] === 'true') ? TRUE : FALSE;
 
-    // Prepare an UPDATE statement for the flagged_as_cheater status
     $sql = "UPDATE `" . $student_table_name . "` SET flagged_as_cheater = ? WHERE lrn = ?";
 
     if ($stmt = $mysqli->prepare($sql)) {
-        // 'is' means integer (for boolean TRUE/FALSE), string
+
         $stmt->bind_param("is", $isFlagged, $lrn);
 
         if ($stmt->execute()) {
@@ -94,13 +74,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 echo json_encode(['status' => 'error', 'message' => 'Student not found or no change made.']);
             }
         } else {
-            // Log the specific SQL error
             error_log("SQL Error (update_flag_status): " . $stmt->error);
             echo json_encode(['status' => 'error', 'message' => 'Error updating flag status: ' . $stmt->error]);
         }
         $stmt->close();
     } else {
-        // Log the specific SQL prepare error
         error_log("SQL Prepare Error (update_flag_status): " . $mysqli->error);
         echo json_encode(['status' => 'error', 'message' => 'Error preparing flag status statement: ' . $mysqli->error]);
     }
@@ -109,9 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 
-// Handle POST requests for resetting session data
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reset_session') {
-    // Prepare an UPDATE statement to reset counts for all students
     $sql = "UPDATE `" . $student_table_name . "` SET times_exited = 0, screenshots_taken = 0, keyboard_used = 0, flagged_as_cheater = FALSE";
 
     if ($stmt = $mysqli->prepare($sql)) {
@@ -131,10 +107,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
-// Fetch student data for display (this runs on initial page load)
 $students = [];
 
-// Prepare a SELECT statement to fetch all students from the current teacher's specific table
 $sql = "SELECT lrn, name, times_exited, screenshots_taken, keyboard_used, flagged_as_cheater, exit_code FROM `" . $student_table_name . "`";
 
 if ($stmt = $mysqli->prepare($sql)) {
@@ -227,7 +201,24 @@ $mysqli->close();
                 </form>
             </div>
         </div>
-
+        <div class="search-container">
+            <div class="search-box">
+                <input type="text" class="search-input" id="studentSearch" placeholder="Search by name or LRN...">
+                <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.35-4.35"></path>
+                </svg>
+                <button class="clear-search" id="clearSearch">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="search-stats" id="searchStats">Showing all students</div>
+        </div>
         <table class="student-table">
             <thead>
                 <tr>
@@ -248,17 +239,27 @@ $mysqli->close();
                 <?php else: ?>
                     <?php foreach ($students as $student): ?>
                         <tr>
-                            <td class="student-id <?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>">
-                                <?php echo htmlspecialchars($student['lrn']); ?></td>
-                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>">
-                                <?php echo htmlspecialchars($student['name']); ?></td>
-                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>">
-                                <?php echo htmlspecialchars($student['times_exited']); ?></td>
-                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>">
-                                <?php echo htmlspecialchars($student['screenshots_taken']); ?></td>
-                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>">
-                                <?php echo htmlspecialchars($student['keyboard_used']); ?></td>
-                            <td>
+                            <td class="student-id <?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
+                                data-label="Student LRN">
+                                <?php echo htmlspecialchars($student['lrn']); ?>
+                            </td>
+                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
+                                data-label="Student Name">
+                                <?php echo htmlspecialchars($student['name']); ?>
+                            </td>
+                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
+                                data-label="Times Exited out of App">
+                                <?php echo htmlspecialchars($student['times_exited']); ?>
+                            </td>
+                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
+                                data-label="Screenshots Taken">
+                                <?php echo htmlspecialchars($student['screenshots_taken']); ?>
+                            </td>
+                            <td class="<?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
+                                data-label="Keyboard Used">
+                                <?php echo htmlspecialchars($student['keyboard_used']); ?>
+                            </td>
+                            <td data-label="Flagged As Cheater?">
                                 <div class="checkbox <?php echo $student['flagged_as_cheater'] ? 'checked' : ''; ?>"
                                     data-student-lrn="<?php echo htmlspecialchars($student['lrn']); ?>"
                                     data-is-flagged="<?php echo $student['flagged_as_cheater'] ? 'true' : 'false'; ?>">
@@ -271,7 +272,7 @@ $mysqli->close();
                                     <?php endif; ?>
                                 </div>
                             </td>
-                            <td>
+                            <td data-label="Exit Code">
                                 <span class="exit-code-display"
                                     id="exit-code-<?php echo htmlspecialchars($student['lrn']); ?>"><?php echo htmlspecialchars($student['exit_code']); ?></span>
                                 <button class="edit-btn" data-student-lrn="<?php echo htmlspecialchars($student['lrn']); ?>"
@@ -359,6 +360,7 @@ $mysqli->close();
     </script>
     <script src="js/show-modals.js"></script>
     <script src="js/checkbox-handler.js"></script>
+    <script src="js/search-bar-handler.js"></script>
 </body>
 
 </html>
