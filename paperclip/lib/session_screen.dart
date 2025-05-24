@@ -1,5 +1,8 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:lottie/lottie.dart';
@@ -26,7 +29,8 @@ class OpenWindowScreen extends StatefulWidget {
 }
 
 class _OpenWindowScreenState extends State<OpenWindowScreen>
-    with WidgetsBindingObserver { // Mixin for observing app lifecycle changes
+    with WidgetsBindingObserver {
+  // Mixin for observing app lifecycle changes
   // MethodChannel for platform-specific communication (e.g., screenshot detection)
   static const platform = MethodChannel('com.example.paperclip/screenshots');
   // Flag to ensure the screenshot handler is set only once globally
@@ -34,57 +38,58 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
 
   late final WebViewController controller; // WebView controller
   bool _isLoading = true; // State for WebView loading indicator
-  final TextEditingController _exitCodeController = TextEditingController(); // Controller for exit code input
+  final TextEditingController _exitCodeController =
+      TextEditingController(); // Controller for exit code input
 
-  // Analytics counters, these will be synchronized with the PHP backend
   int _timesExited = 0;
   int _screenshotsTaken = 0;
   int _keyboardOpened = 0;
-  bool _isKeyboardVisible = false; // Tracks keyboard visibility state
+  bool _isKeyboardVisible = false;
 
   // Base URL for your PHP API endpoints.
-  // IMPORTANT: Replace this with your actual server IP or domain name.
-  // Examples:
-  // - For Android Emulator: "http://10.0.2.2/your_backend_folder/"
-  // - For iOS Simulator/Device: "http://localhost/your_backend_folder/" (if running PHP locally)
-  // - For physical Android device: "http://YOUR_MACHINE_IP_ADDRESS/your_backend_folder/"
-  // - For deployed server: "https://yourdomain.com/your_backend_folder/" (ALWAYS use HTTPS in production)
-  final String _apiBaseUrl = "http://192.168.18.11/"; // Adjust path as needed
+  String? _apiBaseUrl; // Now nullable, fetched asynchronously
 
   @override
   void initState() {
     super.initState();
-    // Add this widget as an observer for app lifecycle events
+
     WidgetsBinding.instance.addObserver(this);
 
-    // Fetch initial analytics data from the backend when the screen loads
-    _fetchAnalytics();
+    // Fetch API base URL first, then proceed with analytics fetch and screenshot listener setup
+    _fetchApiBaseUrl().then((url) {
+      if (mounted) {
+        // Ensure widget is still mounted before setState
+        setState(() {
+          _apiBaseUrl = url;
+        });
+        _fetchAnalytics(); // Fetch analytics once API base URL is available
 
-    // Set up the MethodChannel handler for screenshot detection only once
-    if (!_screenshotHandlerSet) {
-      platform.setMethodCallHandler((call) async {
-        if (call.method == "screenshotTaken") {
-          if (mounted) { // Check if the widget is still mounted before calling setState
-            // Increment the local screenshot count for immediate UI update
-            setState(() {
-              _screenshotsTaken++;
-            });
-            // Send the increment (delta of 1) to the backend
-            _sendAnalyticsUpdate(screenshotsTakenDelta: 1);
-          }
-          print('Screenshot taken. Local count: $_screenshotsTaken');
+        // Set up screenshot handler only after API base URL is available and once
+        if (!_screenshotHandlerSet) {
+          platform.setMethodCallHandler((call) async {
+            if (call.method == "screenshotTaken") {
+              if (mounted) {
+                setState(() {
+                  _screenshotsTaken++;
+                });
+                _sendAnalyticsUpdate(screenshotsTakenDelta: 1);
+              }
+              print('Screenshot taken. Local count: $_screenshotsTaken');
+            }
+          });
+          // Await the invokeMethod call
+          platform.invokeMethod('startScreenshotListener');
+          _screenshotHandlerSet = true;
         }
-      });
-      // Invoke the native method to start listening for screenshot events
-      platform.invokeMethod('startScreenshotListener');
-      _screenshotHandlerSet = true; // Set the flag to prevent re-initialization
-    }
+      }
+    });
 
     // Initialize the WebViewController for ZipGrade
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted) // Enable JavaScript
       ..setBackgroundColor(Colors.white) // Set background color
-      ..setNavigationDelegate( // Set navigation delegate to track page loading
+      ..setNavigationDelegate(
+        // Set navigation delegate to track page loading
         NavigationDelegate(
           onPageStarted: (String url) {
             setState(() {
@@ -96,20 +101,37 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
               _isLoading = false; // Hide loading indicator when page finishes
             });
           },
-          // You can add onWebResourceError, onNavigationRequest here if needed
         ),
       )
-      ..loadRequest(Uri.parse('https://www.zipgrade.com/student/')); // Load the ZipGrade URL
+      ..loadRequest(Uri.parse(
+          'https://www.zipgrade.com/student/')); // Load the ZipGrade URL
 
     // Adjust system UI overlay style after the first frame is rendered
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setSystemUIOverlayStyle(
         const SystemUiOverlayStyle(
           statusBarColor: Color(0xFF7B4EFF), // Custom status bar color
-          statusBarIconBrightness: Brightness.light, // Light icons for dark status bar
+          statusBarIconBrightness:
+              Brightness.light, // Light icons for dark status bar
         ),
       );
     });
+  }
+
+  // Method to fetch API base URL from a remote source
+  Future<String?> _fetchApiBaseUrl() async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+            'https://raw.githubusercontent.com/chrispycreeme/paperclip-server-dump/refs/heads/main/server'),
+      );
+      if (response.statusCode == 200) {
+        return response.body.trim();
+      }
+    } catch (e) {
+      print('Error fetching API base URL in session_screen: $e');
+    }
+    return null;
   }
 
   @override
@@ -124,7 +146,8 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Detect when the app goes into the background (user exits or switches apps)
-    if (state == AppLifecycleState.paused) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       // Increment local exit count
       setState(() {
         _timesExited++;
@@ -132,6 +155,17 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
       // Send the increment to the backend
       _sendAnalyticsUpdate(timesExitedDelta: 1);
       print('App exited. Local count: $_timesExited');
+
+      // Attempt to bring the app back to foreground if it's paused or detached
+      // This is a proactive measure to keep the app in focus if the user tries to exit without the code.
+      final service = FlutterBackgroundService();
+      // Ensure the service is running before trying to bring to foreground
+      service.startService().then((_) {
+        // Only attempt to set as foreground if the service started successfully
+        service.invoke('setAsForeground');
+      }).catchError((e) {
+        print('Error starting service to bring to foreground: $e');
+      });
     }
   }
 
@@ -149,7 +183,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
       _sendAnalyticsUpdate(keyboardOpenedDelta: 1);
       print('Keyboard opened. Local count: $_keyboardOpened');
     } else if (keyboardHeight == 0 && _isKeyboardVisible) {
-      // Keyboard has disappeared
       setState(() {
         _isKeyboardVisible = false;
       });
@@ -234,6 +267,10 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
 
   // Fetches the current analytics counts for the student from the PHP backend.
   Future<void> _fetchAnalytics() async {
+    if (_apiBaseUrl == null) {
+      print('API Base URL is null, cannot fetch analytics.');
+      return;
+    }
     try {
       final response = await http.get(Uri.parse(
           '$_apiBaseUrl/student_api.php?action=get_analytics&student_id=${widget.studentLrn}&teacher_table_name=${widget.teacherTableName}'));
@@ -242,24 +279,21 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
         final Map<String, dynamic> data = json.decode(response.body);
         if (data['success']) {
           setState(() {
-            // Update local state with data from the backend
-            _screenshotsTaken = int.parse(data['data']['screenshots_taken'].toString());
+            _screenshotsTaken =
+                int.parse(data['data']['screenshots_taken'].toString());
             _timesExited = int.parse(data['data']['times_exited'].toString());
-            // Note: Database column is 'keyboard_used', Flutter variable is 'keyboardOpened'
-            _keyboardOpened = int.parse(data['data']['keyboard_used'].toString());
+            _keyboardOpened =
+                int.parse(data['data']['keyboard_used'].toString());
           });
-          print('Analytics fetched: Screenshots: $_screenshotsTaken, Exits: $_timesExited, Keyboard: $_keyboardOpened');
+          print(
+              'Analytics fetched: Screenshots: $_screenshotsTaken, Exits: $_timesExited, Keyboard: $_keyboardOpened');
         } else {
           print('Failed to fetch analytics: ${data['message']}');
-          // If student data is not found or an error occurs, reset local counts to 0
           setState(() {
             _screenshotsTaken = 0;
             _timesExited = 0;
             _keyboardOpened = 0;
           });
-          // In a real scenario, if a student record doesn't exist, you might
-          // want to create it on the server with initial zero counts.
-          // For this setup, we assume student records are pre-created by the teacher.
         }
       } else {
         print('Server error fetching analytics: ${response.statusCode}');
@@ -275,11 +309,15 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
     int timesExitedDelta = 0,
     int keyboardOpenedDelta = 0,
   }) async {
+    if (_apiBaseUrl == null) {
+      print('API Base URL is null, cannot send analytics update.');
+      return;
+    }
     try {
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/student_api.php'),
         body: {
-          'action': 'update_analytics', // Action to perform on the API
+          'action': 'update_analytics',
           'student_id': widget.studentLrn,
           'teacher_table_name': widget.teacherTableName,
           'screenshots_taken_delta': screenshotsTakenDelta.toString(),
@@ -292,8 +330,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
         final Map<String, dynamic> data = json.decode(response.body);
         if (data['success']) {
           print('Analytics update successful: ${data['message']}');
-          // No need to call _fetchAnalytics() here as local state is already updated,
-          // and it will be fetched again when the info modal is opened.
         } else {
           print('Analytics update failed: ${data['message']}');
         }
@@ -307,13 +343,19 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
 
   // Fetches the exit code for the current student from the PHP backend for validation.
   Future<String?> _getExitCode() async {
+    if (_apiBaseUrl == null) {
+      print('API Base URL is null, cannot get exit code.');
+      return null;
+    }
     try {
       final response = await http.get(Uri.parse(
           '$_apiBaseUrl/student_api.php?action=get_exit_code&student_id=${widget.studentLrn}&teacher_table_name=${widget.teacherTableName}'));
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(response.body);
-        if (data['success'] && data['data'] != null && data['data']['exit_code'] != null) {
+        if (data['success'] &&
+            data['data'] != null &&
+            data['data']['exit_code'] != null) {
           return data['data']['exit_code'].toString();
         } else {
           print('Failed to get exit code: ${data['message']}');
@@ -331,19 +373,17 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
 
   // --- UI Methods for Bottom Sheets ---
 
-  // Shows the analytics information bottom sheet.
   void _showInfoBottomSheet(BuildContext context) {
-    // Fetch the latest analytics data before showing the modal to ensure accuracy.
     _fetchAnalytics().then((_) {
       showModalBottomSheet(
         context: context,
-        isScrollControlled: true, // Allows the sheet to take up more height
-        backgroundColor: const Color.fromRGBO(125, 89, 255, 0.73), // Semi-transparent background
+        isScrollControlled: true,
+        backgroundColor: const Color.fromRGBO(125, 89, 255, 0.73),
         builder: (BuildContext context) {
           return DraggableScrollableSheet(
-            initialChildSize: 0.5, // Initial height of the sheet
-            minChildSize: 0.3, // Minimum height when dragged down
-            maxChildSize: 0.7, // Maximum height when dragged up
+            initialChildSize: 0.5,
+            minChildSize: 0.3,
+            maxChildSize: 0.7,
             builder: (_, scrollController) {
               return Container(
                 decoration: const BoxDecoration(
@@ -355,7 +395,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                 ),
                 child: Column(
                   children: [
-                    // Drag handle at the top of the sheet
                     Container(
                       margin: const EdgeInsets.only(top: 12, bottom: 8),
                       width: 40,
@@ -365,8 +404,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-
-                    // Close button at the top right
                     Align(
                       alignment: Alignment.topRight,
                       child: IconButton(
@@ -374,14 +411,11 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                         onPressed: () => Navigator.pop(context),
                       ),
                     ),
-
-                    // Main content of the info sheet, scrollable
                     Expanded(
                       child: ListView(
-                        controller: scrollController, // Link to DraggableScrollableSheet's controller
+                        controller: scrollController,
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         children: [
-                          // Basic Information section title
                           const Text(
                             'Basic Information',
                             style: TextStyle(
@@ -390,10 +424,7 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-
-                          const Divider(height: 24), // Separator
-
-                          // User LRN display
+                          const Divider(height: 24),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -405,17 +436,14 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                                 ),
                               ),
                               Text(
-                                widget.studentLrn, // Display the actual student LRN passed to the widget
+                                widget.studentLrn,
                                 style: const TextStyle(
                                   fontSize: 16,
                                 ),
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 12),
-
-                          // Student Name display
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -427,17 +455,14 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                                 ),
                               ),
                               Text(
-                                widget.studentName, // Display the actual student name passed to the widget
+                                widget.studentName,
                                 style: const TextStyle(
                                   fontSize: 16,
                                 ),
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 32),
-
-                          // Analytics section title
                           const Row(
                             children: [
                               Icon(
@@ -456,33 +481,24 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 16),
-
-                          // Analytics cards displaying the fetched counts
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // Times exited card
                               _buildAnalyticsCard(
                                 'Times exited:',
                                 '$_timesExited',
                               ),
-
-                              // Screenshot taken card
                               _buildAnalyticsCard(
                                 'Screenshot taken:',
                                 '$_screenshotsTaken',
                               ),
-
-                              // Keyboard opened card
                               _buildAnalyticsCard(
                                 'Keyboard opened',
                                 '$_keyboardOpened',
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 40),
                         ],
                       ),
@@ -494,10 +510,9 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
           );
         },
       );
-    }); // End of .then((_) { ... });
+    });
   }
 
-  // Shows the exit confirmation bottom sheet.
   void _showExitBottomSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -519,7 +534,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
               ),
               child: Column(
                 children: [
-                  // Drag handle
                   Container(
                     margin: const EdgeInsets.only(top: 12, bottom: 8),
                     width: 40,
@@ -529,8 +543,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-
-                  // Close button
                   Align(
                     alignment: Alignment.topRight,
                     child: IconButton(
@@ -538,14 +550,11 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                       onPressed: () => Navigator.pop(context),
                     ),
                   ),
-
-                  // Content
                   Expanded(
                     child: ListView(
                       controller: scrollController,
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       children: [
-                        // Illustration
                         SizedBox(
                           height: 180,
                           child: Center(
@@ -555,10 +564,7 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                             ),
                           ),
                         ),
-
                         const SizedBox(height: 20),
-
-                        // Exit message
                         const Text(
                           'Before exiting, please enter your exit code given by your class adviser.',
                           textAlign: TextAlign.center,
@@ -567,10 +573,7 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                               color: Colors.black87,
                               fontWeight: FontWeight.w500),
                         ),
-
                         const SizedBox(height: 24),
-
-                        // Exit code input field
                         TextField(
                           controller: _exitCodeController,
                           decoration: InputDecoration(
@@ -593,21 +596,24 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                             fontSize: 12,
                           ),
                         ),
-
                         const SizedBox(height: 12),
-
-                        // Exit button
                         ElevatedButton(
                           onPressed: () async {
-                            // Get the entered exit code
                             String enteredCode = _exitCodeController.text;
-                            // Fetch the correct exit code from the backend
                             String? correctCode = await _getExitCode();
 
-                            // Validate the entered code against the fetched code
-                            if (correctCode != null && enteredCode == correctCode) {
-                              Navigator.pop(context); // Close the bottom sheet
-                              // Navigate back to the login screen (or wherever MyApp leads)
+                            if (correctCode != null &&
+                                enteredCode == correctCode) {
+                              // Stop the background service before navigating away
+                              final service = FlutterBackgroundService();
+                              try {
+                                service.invoke('stopService');
+                              } catch (e) {
+                                print('Error invoking stopService: $e');
+                                // Log the error but don't block navigation
+                              }
+
+                              Navigator.pop(context);
                               Navigator.pushReplacement(
                                 context,
                                 MaterialPageRoute(
@@ -615,9 +621,9 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                                 ),
                               );
                             } else {
-                              // Show a SnackBar if the code is invalid
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Invalid Exit Code.')),
+                                const SnackBar(
+                                    content: Text('Invalid Exit Code.')),
                               );
                             }
                           },
@@ -637,7 +643,6 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
                             ),
                           ),
                         ),
-
                         const SizedBox(height: 40),
                       ],
                     ),
@@ -651,10 +656,9 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
     );
   }
 
-  // Helper method to build a standardized analytics card widget.
   Widget _buildAnalyticsCard(String title, String value) {
     return Container(
-      width: MediaQuery.of(context).size.width * 0.27, // Responsive width
+      width: MediaQuery.of(context).size.width * 0.27,
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
       decoration: BoxDecoration(
         color: Colors.grey[200],

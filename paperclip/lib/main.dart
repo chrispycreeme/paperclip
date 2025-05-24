@@ -1,14 +1,53 @@
+// ignore_for_file: avoid_print, use_build_context_synchronously
+
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:lottie/lottie.dart';
 import 'package:http/http.dart' as http; // Import for HTTP requests
+import 'package:paperclip_app/background_service_handler.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'dart:convert'; // Import for JSON encoding/decoding
+import 'dart:io'; // Import for Platform
 
 import 'server_offline_screen.dart';
 import 'session_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized(); // ESSENTIAL for plugins to work
+
+  // Request notification permissions for Android 13+ foreground service
+  // This is crucial for the background service to run in foreground mode
+  if (Platform.isAndroid) {
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
+    }
+  }
+
+  await initializeBackgroundService();
   runApp(const MyApp());
+}
+
+Future<void> initializeBackgroundService() async {
+  final service = FlutterBackgroundService();
+
+  // Configure the background service
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart, // The entry point function from background_service_handler.dart
+      isForegroundMode: true, // CRUCIAL: Makes it a foreground service with notification
+      autoStart: false, // We will start it manually after successful login
+      notificationChannelId: 'paperclip_monitoring_channel', // MUST match AndroidManifest.xml
+      initialNotificationTitle: 'Paperclip Monitoring',
+      initialNotificationContent: 'Session active. Monitoring for integrity.',
+      foregroundServiceNotificationId: 888, // Unique ID for the foreground notification
+    ),
+    iosConfiguration: IosConfiguration(
+      onBackground: onStart, // Now compatible as onStart returns Future<bool>
+      autoStart: false,
+      // onForeground: onStart, // You might uncomment this if you want it to run in foreground too
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -35,9 +74,12 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStateMixin {
-  final TextEditingController _referenceController = TextEditingController(); // For LRN
-  final TextEditingController _accessCodeController = TextEditingController(); // For Password
+class _LoginScreenState extends State<LoginScreen>
+    with SingleTickerProviderStateMixin {
+  final TextEditingController _referenceController =
+      TextEditingController(); // For LRN
+  final TextEditingController _accessCodeController =
+      TextEditingController(); // For Password
   late AnimationController _lottieController;
   bool _isLoading = false; // To show loading state during login
   String? _errorMessage; // To display login error messages
@@ -45,7 +87,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   // Base URL for your PHP API endpoints.
   // IMPORTANT: Replace this with your actual server IP or domain name.
   // This should be the same base URL as in session_screen.dart.
-  final String _apiBaseUrl = "http://192.168.18.11/"; // Adjust path as needed
+  String? _apiBaseUrl; // Now nullable, fetched asynchronously
 
   @override
   void initState() {
@@ -54,6 +96,16 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       vsync: this,
       duration: const Duration(seconds: 3),
     );
+
+    // Fetch API base URL when the widget initializes
+    _fetchApiBaseUrl().then((url) {
+      if (mounted) {
+        // Ensure widget is still mounted before setState
+        setState(() {
+          _apiBaseUrl = url;
+        });
+      }
+    });
 
     // Auto-play the animation when the screen loads
     _lottieController.forward();
@@ -67,6 +119,22 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     });
   }
 
+  // Method to fetch API base URL from a remote source
+  Future<String?> _fetchApiBaseUrl() async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+            'https://raw.githubusercontent.com/chrispycreeme/paperclip-server-dump/refs/heads/main/server'),
+      );
+      if (response.statusCode == 200) {
+        return response.body.trim();
+      }
+    } catch (e) {
+      print('Error fetching API base URL: $e');
+    }
+    return null;
+  }
+
   @override
   void dispose() {
     _referenceController.dispose();
@@ -76,20 +144,19 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   }
 
   // Helper function to derive teacher_table_name from LRN
-  // This logic must match how your students are assigned to teacher tables.
-  // Example: If LRNs starting with 'S1' belong to teacher1, 'S2' to teacher2, etc.
   String? _deriveTeacherTableName(String lrn) {
-    if (lrn.startsWith('S1')) { // Example: S1001 for students_teacher1
+    if (lrn.startsWith('S1')) {
       return 'students_teacher1';
-    } else if (lrn.startsWith('S2')) { // Example: S2001 for students_teacher2
+    } else if (lrn.startsWith('S2')) {
       return 'students_teacher2';
     }
-    // Add more conditions for other teachers if you have more student tables
-    return null; // Return null if no matching table name is found for the given LRN
+    return null;
   }
 
   // Method to handle student login
   Future<void> _loginStudent() async {
+    if (_isLoading) return; // Prevent multiple login attempts
+
     setState(() {
       _isLoading = true;
       _errorMessage = null; // Clear previous errors
@@ -106,7 +173,14 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       return;
     }
 
-    // Derive the teacher table name from the LRN before sending the request
+    if (_apiBaseUrl == null) {
+      setState(() {
+        _errorMessage = "Server configuration not loaded. Please try again.";
+        _isLoading = false;
+      });
+      return;
+    }
+
     final teacherTableName = _deriveTeacherTableName(lrn);
     if (teacherTableName == null) {
       setState(() {
@@ -117,67 +191,88 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     }
 
     try {
+      _lottieController.repeat(); // Show loading animation
+
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/student_login.php'),
         body: {
           'lrn': lrn,
           'password': password,
-          'teacher_table_name': teacherTableName, // Pass the derived table name to PHP
+          'teacher_table_name': teacherTableName,
         },
       );
+
+      _lottieController.stop(); // Stop animation after response
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(response.body);
         if (data['success']) {
-          // Login successful, navigate to OpenWindowScreen
           final String studentLrn = data['student_lrn'];
-          final String fetchedTeacherTableName = data['teacher_table_name']; // Use fetched table name from PHP response
-          final String studentName = data['student_name']; // Get student name from response
+          final String fetchedTeacherTableName = data['teacher_table_name'];
+          final String studentName = data['student_name'];
 
+          final service = FlutterBackgroundService();
+          // Start the background service
+          await service.startService();
+
+          // Send update to the background service with necessary data
+          service.invoke('update', {
+            'lrn': studentLrn,
+            'teacherTable': fetchedTeacherTableName,
+            'apiBaseUrl': _apiBaseUrl
+          });
+
+          // Only navigate AFTER background service is started and updated
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (context) => OpenWindowScreen(
                 studentLrn: studentLrn,
                 teacherTableName: fetchedTeacherTableName,
-                studentName: studentName, // Pass student name to session screen
+                studentName: studentName,
               ),
             ),
           );
         } else {
-          // Login failed, show error message from backend
           setState(() {
             _errorMessage = data['message'] ?? "Login failed. Please try again.";
           });
         }
       } else {
-        // Server error (e.g., 500, 404)
         setState(() {
           _errorMessage = "Server error: ${response.statusCode}. Please try again later.";
         });
       }
+    } on http.ClientException catch (e) {
+      print('HTTP Client Exception: $e');
+      if (mounted) {
+        // Check mounted before navigating
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const ServerOfflineScreen()),
+        );
+      }
     } catch (e) {
-      // Network error or other exceptions
-      setState(() {
-        _errorMessage = "Network error: Could not connect to server. Check your internet connection or server URL.";
-      });
       print('Login error: $e');
-    } finally {
       setState(() {
-        _isLoading = false;
+        _errorMessage = "An unexpected error occurred: $e";
       });
+    } finally {
+      if (mounted) {
+        // Ensure widget is still mounted before setState
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Get screen size for responsive design
     final size = MediaQuery.of(context).size;
-    // ignore: unused_local_variable
-    final isSmallScreen = size.width < 600;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF7B4EFF), // Purple background color
+      backgroundColor: const Color(0xFF7B4EFF),
       body: SafeArea(
         child: SingleChildScrollView(
           child: Padding(
@@ -187,20 +282,18 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             ),
             child: Column(
               children: [
-                // Logo and app name
                 SizedBox(height: size.height * 0.02),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Replace with your actual logo SVG
                     SizedBox(
                       width: 50,
                       height: 50,
                       child: SvgPicture.asset(
+                        'assets/images/paperclip_logo.svg',
                         width: 50,
                         height: 50,
                         color: Colors.white,
-                        'assets/images/paperclip_logo.svg', // Your SVG file
                         fit: BoxFit.contain,
                       ),
                     ),
@@ -227,28 +320,22 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ),
                   ],
                 ),
-
-                // Lottie Animation instead of static image
                 SizedBox(height: size.height * 0.04),
                 SizedBox(
                   height: size.height * 0.25,
                   child: Center(
                     child: Lottie.asset(
-                      'assets/animations/education_animation.json', // Your Lottie JSON file
+                      'assets/animations/education_animation.json',
                       controller: _lottieController,
                       fit: BoxFit.contain,
                       width: size.width * 0.9,
                       height: size.height * 0.9,
-                      // Optional: Add onLoaded callback if you need to set specific animation behavior
                       onLoaded: (composition) {
-                        // You can adjust the controller duration to match the animation
                         _lottieController.duration = composition.duration;
                       },
                     ),
                   ),
                 ),
-
-                // Hello text
                 SizedBox(height: size.height * 0.03),
                 const Align(
                   alignment: Alignment.centerLeft,
@@ -273,8 +360,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ],
                   ),
                 ),
-
-                // Form fields
                 SizedBox(height: size.height * 0.04),
                 TextField(
                   controller: _referenceController,
@@ -294,16 +379,14 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   ),
                   style: const TextStyle(color: Colors.white),
                 ),
-
                 const SizedBox(height: 16),
-
                 TextField(
                   controller: _accessCodeController,
                   obscureText: true,
                   decoration: InputDecoration(
                     filled: true,
                     fillColor: Colors.white.withOpacity(0.2),
-                    hintText: "Access Code", // Changed from "Access Code" to "Password" conceptually
+                    hintText: "Access Code",
                     hintStyle: const TextStyle(color: Colors.white70),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(30),
@@ -316,8 +399,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   ),
                   style: const TextStyle(color: Colors.white),
                 ),
-
-                // Error message display
                 if (_errorMessage != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 16.0),
@@ -327,22 +408,21 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                       textAlign: TextAlign.center,
                     ),
                   ),
-
-                // Login button
                 const SizedBox(height: 24),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _loginStudent, // Disable button while loading
+                    onPressed: _isLoading || _apiBaseUrl == null ? null : _loginStudent,
                     style: ElevatedButton.styleFrom(
-                      foregroundColor: const Color(0xFF7B4EFF), backgroundColor: Colors.white,
+                      foregroundColor: const Color(0xFF7B4EFF),
+                      backgroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),
                     ),
                     child: _isLoading
-                        ? const CircularProgressIndicator(color: Color(0xFF7B4EFF)) // Show loading indicator
+                        ? const CircularProgressIndicator(color: Color(0xFF7B4EFF))
                         : const Text(
                             'LOG IN',
                             style: TextStyle(
@@ -352,8 +432,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                           ),
                   ),
                 ),
-
-                // OR divider
                 const SizedBox(height: 24),
                 Row(
                   children: [
@@ -381,8 +459,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ),
                   ],
                 ),
-
-                // Teacher note
                 const SizedBox(height: 16),
                 const Text(
                   "If you're a teacher, please visit\nthe web application instead.",
@@ -392,24 +468,20 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     fontSize: 14,
                   ),
                 ),
-
-                // Web application button (This button now correctly navigates to OpenWindowScreen
-                // with placeholder values, as it's not a student login path)
                 const SizedBox(height: 16),
                 SizedBox(
                   width: size.width * 0.6,
                   child: ElevatedButton(
                     onPressed: () {
-                      // This button is for teachers to visit the web app.
-                      // In a real scenario, this would likely open a browser or
-                      // navigate to a teacher-specific login flow.
-                      // For now, it navigates to the OpenWindowScreen with dummy data.
-                      Navigator.push(context, MaterialPageRoute(
-                        builder: (context) => const ServerOfflineScreen()
-                      ));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) =>
+                                  const ServerOfflineScreen()));
                     },
                     style: ElevatedButton.styleFrom(
-                      foregroundColor: Colors.white, backgroundColor: Colors.white.withOpacity(0.2),
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.white.withOpacity(0.2),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
@@ -423,8 +495,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ),
                   ),
                 ),
-
-                // Footer
                 SizedBox(height: size.height * 0.06),
                 Text(
                   'Hosted by Tapinac Senior High School @ STEM',
