@@ -124,23 +124,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'background_heartbeat') {
     $status = $_POST['status'] ?? 'unknown';
-    // You can log this heartbeat, update a 'last_seen' timestamp in your student table,
-    // or simply acknowledge it. For now, we'll just acknowledge.
-
-    // Example: Update a 'last_heartbeat_at' timestamp in the student's table
-    // You would need to add a 'last_heartbeat_at' column (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
-    // to your students_teacherX tables for this to be useful.
-    /*
-    $sql_heartbeat = "UPDATE `" . $teacher_table_name . "` SET last_heartbeat_at = CURRENT_TIMESTAMP WHERE lrn = ?";
-    if ($stmt_heartbeat = $mysqli->prepare($sql_heartbeat)) {
-        $stmt_heartbeat->bind_param("s", $student_id);
-        $stmt_heartbeat->execute();
-        $stmt_heartbeat->close();
-    } else {
-        error_log("SQL Prepare Error (background_heartbeat): " . $mysqli->error);
-    }
-    */
-
     echo json_encode(["success" => true, "message" => "Heartbeat received for $student_id, status: $status"]);
     $mysqli->close();
     exit();
