@@ -107,6 +107,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_student') {
+    $lrn = trim($_POST['lrn'] ?? '');
+
+    if (empty($lrn)) {
+        echo json_encode(['status' => 'error', 'message' => 'LRN is required to delete a student.']);
+        $mysqli->close();
+        exit;
+    }
+
+    $sql = "DELETE FROM `" . $student_table_name . "` WHERE lrn = ?";
+
+    if ($stmt = $mysqli->prepare($sql)) {
+        $stmt->bind_param("s", $lrn);
+        if ($stmt->execute()) {
+            if ($stmt->affected_rows > 0) {
+                echo json_encode(['status' => 'success', 'message' => 'Student deleted successfully.']);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Student not found or no student was deleted.']);
+            }
+        } else {
+            error_log("SQL Error (delete_student): " . $stmt->error);
+            echo json_encode(['status' => 'error', 'message' => 'Error deleting student: ' . $stmt->error]);
+        }
+        $stmt->close();
+    } else {
+        error_log("SQL Prepare Error (delete_student): " . $mysqli->error);
+        echo json_encode(['status' => 'error', 'message' => 'Error preparing delete statement: ' . $mysqli->error]);
+    }
+    $mysqli->close();
+    exit;
+}
+
 $students = [];
 
 $sql = "SELECT lrn, name, times_exited, screenshots_taken, keyboard_used, flagged_as_cheater, exit_code FROM `" . $student_table_name . "`";
@@ -125,6 +157,52 @@ if ($stmt = $mysqli->prepare($sql)) {
 } else {
     error_log("SQL Prepare Error (fetch students): " . $mysqli->error);
     echo "ERROR: Could not prepare statement for fetching students. " . $mysqli->error;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_student') {
+    $lrn = trim($_POST['lrn'] ?? '');
+    $name = trim($_POST['name'] ?? '');
+    $password = trim($_POST['password'] ?? ''); // Get the password from POST
+
+    if (empty($lrn) || empty($name) || empty($password)) {
+        echo json_encode(['status' => 'error', 'message' => 'LRN, Name, and Password are required.']);
+        $mysqli->close();
+        exit;
+    }
+
+    // Hash the password
+    $hashed_password = password_hash($password, PASSWORD_DEFAULT); // Auto hash like generate_hash.php
+
+    // Initialize other fields with default values
+    $times_exited = 0;
+    $screenshots_taken = 0;
+    $keyboard_used = 0;
+    $flagged_as_cheater = FALSE;
+    $exit_code = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+
+    // Modified SQL to include the 'password' column
+    $sql = "INSERT INTO `" . $student_table_name . "` (lrn, name, password, times_exited, screenshots_taken, keyboard_used, flagged_as_cheater, exit_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+
+    if ($stmt = $mysqli->prepare($sql)) {
+        // Bind the new password parameter 's' (string)
+        $stmt->bind_param("sssiiibs", $lrn, $name, $hashed_password, $times_exited, $screenshots_taken, $keyboard_used, $flagged_as_cheater, $exit_code);
+        if ($stmt->execute()) {
+            if ($stmt->affected_rows > 0) {
+                echo json_encode(['status' => 'success', 'message' => 'Student added successfully.']);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Failed to add student.']);
+            }
+        } else {
+            error_log("SQL Error (add_student): " . $stmt->error);
+            echo json_encode(['status' => 'error', 'message' => 'Error adding student: ' . $stmt->error]);
+        }
+        $stmt->close();
+    } else {
+        error_log("SQL Prepare Error (add_student): " . $mysqli->error);
+        echo json_encode(['status' => 'error', 'message' => 'Error preparing statement: ' . $mysqli->error]);
+    }
+    $mysqli->close();
+    exit;
 }
 
 $mysqli->close();
@@ -229,6 +307,7 @@ $mysqli->close();
                     <th>Keyboard Used</th>
                     <th>Flagged As Cheater?</th>
                     <th>Exit Code</th>
+                    <th>Delete</th>
                 </tr>
             </thead>
             <tbody>
@@ -238,7 +317,7 @@ $mysqli->close();
                     </tr>
                 <?php else: ?>
                     <?php foreach ($students as $student): ?>
-                        <tr>
+                        <tr data-lrn="<?php echo htmlspecialchars($student['lrn']); ?>">
                             <td class="student-id <?php echo $student['flagged_as_cheater'] ? 'warning-student' : ''; ?>"
                                 data-label="Student LRN">
                                 <?php echo htmlspecialchars($student['lrn']); ?>
@@ -285,13 +364,29 @@ $mysqli->close();
                                     </svg>
                                 </button>
                             </td>
+                            <td data-label="Actions">
+                                <button class="delete-btn" data-student-lrn="<?php echo htmlspecialchars($student['lrn']); ?>"
+                                    data-student-name="<?php echo htmlspecialchars($student['name']); ?>"
+                                    title="Delete Student">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round">
+                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                        <path
+                                            d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                        </path>
+                                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                                    </svg>
+                                </button>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 <?php endif; ?>
             </tbody>
         </table>
 
-        <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; align-items: center;">
             <a href="export.php" class="export-btn" style="text-decoration: none;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -301,9 +396,75 @@ $mysqli->close();
                 </svg>
                 Export Session Data
             </a>
-            <div class="pagination">
+            <button class="export-btn" id="importStudentDataBtn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 14.899A7 7 0 0 1 7 14h.007a7 7 0 0 1 6.993 7.899"></path>
+                    <path d="M12 16v-9"></path>
+                    <path d="m15 10-3-3-3 3"></path>
+                </svg>
+                Import Student Data
+            </button>
+
+            <button class="export-btn" id="addStudentDataBtn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Add Student Data
+            </button>
+            <!-- <div class="pagination">
                 <button>Previous</button>
                 <button>Next</button>
+            </div> -->
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="addStudentModal">
+        <div class="modal">
+            <h2>Add New Student</h2>
+            <form id="addStudentForm" method="POST" action="add_student.php">
+                <div class="input-label">LRN</div>
+                <input type="text" name="lrn" placeholder="Student LRN" required>
+                <div class="input-label">Student Name</div>
+                <input type="text" name="name" placeholder="Student Name" required>
+                <div class="input-label">Password</div> <input type="text" name="password"
+                    placeholder="Student Password" required>
+                <div class="modal-footer">
+                    <button type="button" class="cancel-btn" id="cancelAddStudentBtn">Cancel</button>
+                    <button type="submit" class="proceed-btn" id="saveAddStudentBtn">Add Student</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="deleteStudentModal">
+        <div class="modal">
+            <h2>Confirm Deletion</h2>
+            <p>Are you sure you want to delete the student <strong id="studentNameToDelete"></strong> (LRN: <span
+                    id="studentLrnToDelete"></span>)?</p>
+            <div class="notice-box">
+                <div class="notice-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path
+                            d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z">
+                        </path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </div>
+                <div class="notice-content">
+                    <strong>Important Notice</strong><br>
+                    Once the student is deleted, all their data will be permanently removed and cannot be
+                    recovered. Please ensure you have exported any necessary data before proceeding.
+                </div>
+            </div>
+            <div id="deleteStudentMessage" style="margin-top: 10px;"></div>
+            <div class="modal-footer">
+                <button type="button" class="cancel-btn" id="cancelDeleteStudentBtn">Cancel</button>
+                <button type="button" class="proceed-btn danger" id="confirmDeleteStudentBtn">Delete Student</button>
             </div>
         </div>
     </div>
@@ -361,6 +522,7 @@ $mysqli->close();
     <script src="js/show-modals.js"></script>
     <script src="js/checkbox-handler.js"></script>
     <script src="js/search-bar-handler.js"></script>
+    <script src="js/delete-student.js"></script>
 </body>
 
 </html>

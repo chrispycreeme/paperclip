@@ -326,7 +326,7 @@ header {
     margin-right: 12px;
 }
 
-.pagination {
+/* .pagination {
     display: flex;
     gap: 5px;
 }
@@ -344,6 +344,33 @@ header {
 
 .pagination button:hover {
     background-color: #f9f9f9;
+} */
+
+.delete-btn {
+    background-color: #ff7c7c;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(255, 124, 124, 0.08);
+}
+
+.delete-btn:hover,
+.delete-btn:focus {
+    background-color: #ff5252;
+    box-shadow: 0 4px 16px rgba(255, 82, 82, 0.15);
+
+}
+
+.delete-btn svg {
+    stroke: #fff;
+    margin-right: 0;
+    pointer-events: none;
 }
 
 .checkbox {
@@ -409,6 +436,8 @@ header {
     overflow-y: auto;
     box-shadow: 0 5px 30px rgba(0, 0, 0, 0.15);
 }
+
+
 
 .modal h2 {
     margin-top: 0;

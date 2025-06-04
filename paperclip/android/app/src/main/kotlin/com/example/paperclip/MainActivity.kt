@@ -1,4 +1,4 @@
-package com.example.paperclip // Make sure this matches your package name
+package com.example.paperclip
 
 import android.content.ContentResolver
 import android.database.ContentObserver
@@ -6,19 +6,23 @@ import android.net.Uri
 import android.os.Handler
 import android.provider.MediaStore
 import androidx.annotation.NonNull
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import android.os.Looper
+import android.os.Bundle
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.example.paperclip/screenshots" // Ensure this matches your Dart code
+    private val CHANNEL = "com.example.paperclip/screenshots"
     private lateinit var channel: MethodChannel
     private var screenshotObserver: ContentObserver? = null
 
-    // Debouncing mechanism
-    private val handler = Handler()
+    private val handler = Handler(Looper.getMainLooper())
     private var lastScreenshotTime: Long = 0
-    private val DEBOUNCE_DELAY_MS = 2000L // 2 seconds, adjust as needed
+    private val DEBOUNCE_DELAY_MS = 2000L
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -34,18 +38,29 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationChannel = NotificationChannel(
+                "paperclip_monitoring_channel",
+                "Paperclip Monitoring",
+                NotificationManager.IMPORTANCE_HIGH
+            )
+            notificationChannel.description = "Background monitoring for Paperclip sessions"
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(notificationChannel)
+        }
+    }
+
     private fun startWatchingScreenshots() {
-        screenshotObserver = object : ContentObserver(Handler()) { // Keep this handler for ContentObserver's thread
+        screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
                 uri?.let {
-                    // Check if it's likely an image file change
                     if (it.toString().startsWith(MediaStore.Images.Media.EXTERNAL_CONTENT_URI.toString()) ||
                         it.toString().startsWith(MediaStore.Images.Media.INTERNAL_CONTENT_URI.toString())) {
 
                         val currentTime = System.currentTimeMillis()
-                        // If enough time has passed since the last detected screenshot,
-                        // or if it's the very first one, trigger the event.
                         if (currentTime - lastScreenshotTime > DEBOUNCE_DELAY_MS) {
                             lastScreenshotTime = currentTime
                             // Post to the main thread to invoke MethodChannel

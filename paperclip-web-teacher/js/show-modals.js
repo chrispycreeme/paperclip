@@ -20,14 +20,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const exitCodeInput = document.getElementById('exitCodeInput');
     const studentLrnInput = document.getElementById('studentLrnInput');
 
+    // New modal elements for Add Student Data
+    const addStudentModal = document.getElementById('addStudentModal');
+    const addStudentDataBtn = document.getElementById('addStudentDataBtn');
+    const cancelAddStudentBtn = document.getElementById('cancelAddStudentBtn');
+    const addStudentForm = document.getElementById('addStudentForm'); // If using AJAX for adding
+
+    // New button for Import Student Data
+    const importStudentDataBtn = document.getElementById('importStudentDataBtn');
+
     // Function to open a modal
     function openModal(modal) {
-        modal.classList.add('active');
+        modal.classList.add('active'); // Assuming 'active' class controls visibility
+        modal.style.display = 'flex'; // Ensure it's displayed as a flex container
     }
 
     // Function to close a modal
     function closeModal(modal) {
         modal.classList.remove('active');
+        modal.style.display = 'none'; // Hide it
     }
 
     // Event listener for "Reset Session" button
@@ -65,9 +76,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const studentName = event.currentTarget.dataset.studentName;
             const currentExitCode = event.currentTarget.dataset.currentExitCode;
 
-            studentNameEditModal.textContent = studentName;
-            exitCodeInput.value = currentExitCode;
-            studentLrnInput.value = studentLrn;
+            if (studentNameEditModal) studentNameEditModal.textContent = studentName;
+            if (exitCodeInput) exitCodeInput.value = currentExitCode;
+            if (studentLrnInput) studentLrnInput.value = studentLrn;
 
             openModal(editExitCodeModal);
         });
@@ -122,6 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         closeModal(editExitCodeModal);
                         alert(data.message); // Inform the user of success
                         console.log('Update successful:', data.message);
+                        location.reload(); // Reload the page to refresh student data table
                     } else {
                         alert('Error: ' + data.message); // Show error message from server
                         console.error('Server error updating exit code:', data.message);
@@ -134,6 +146,66 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn("LRN or New Exit Code is missing before sending AJAX request.");
                 alert("Missing student LRN or exit code. Cannot proceed with update.");
             }
+        });
+    }
+
+    // Event listeners for the new "Add Student Data" modal
+    if (addStudentDataBtn) {
+        addStudentDataBtn.addEventListener('click', () => {
+            openModal(addStudentModal);
+        });
+    }
+
+    if (cancelAddStudentBtn) {
+        cancelAddStudentBtn.addEventListener('click', () => {
+            closeModal(addStudentModal);
+            if (addStudentForm) addStudentForm.reset(); // Clear form on cancel
+        });
+    }
+
+    // If you decide to handle adding student via AJAX on dashboard.php
+    if (addStudentForm) {
+        addStudentForm.addEventListener('submit', async (e) => {
+            e.preventDefault(); // Prevent default form submission
+
+            const lrn = addStudentForm.querySelector('input[name="lrn"]').value;
+            const name = addStudentForm.querySelector('input[name="name"]').value;
+            const password = addStudentForm.querySelector('input[name="password"]').value;
+
+            try {
+                const response = await fetch('dashboard.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        action: 'add_student',
+                        lrn: lrn,
+                        name: name,
+                        password: password
+                    }).toString()
+                });
+                
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(data.message);
+                    closeModal(addStudentModal); // Close the modal on success
+                    location.reload(); // Reload to show new student
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while adding the student.');
+            }
+        });
+    }
+
+    // Event listener for the import button (to redirect to import_students.php)
+    if (importStudentDataBtn) {
+        importStudentDataBtn.addEventListener('click', () => {
+            window.location.href = 'import_students.php'; // Redirect to the import page
         });
     }
 
@@ -150,6 +222,15 @@ document.addEventListener('DOMContentLoaded', () => {
         editExitCodeModal.addEventListener('click', (event) => {
             if (event.target === editExitCodeModal) {
                 closeModal(editExitCodeModal);
+            }
+        });
+    }
+
+    // Add this for the new add student modal too
+    if (addStudentModal) {
+        addStudentModal.addEventListener('click', (event) => {
+            if (event.target === addStudentModal) {
+                closeModal(addStudentModal);
             }
         });
     }

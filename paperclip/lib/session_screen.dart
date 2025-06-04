@@ -1,13 +1,16 @@
-// ignore_for_file: avoid_print
+// ignore_for_file: avoid_print, use_build_context_synchronously
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:paperclip_app/background_service_handler.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:lottie/lottie.dart';
 import 'package:http/http.dart' as http; // Import for HTTP requests
 import 'dart:convert'; // Import for JSON encoding/decoding
+import 'dart:io';
 
 import 'main.dart'; // Ensure this points to your main app file
 
@@ -26,6 +29,27 @@ class OpenWindowScreen extends StatefulWidget {
 
   @override
   State<OpenWindowScreen> createState() => _OpenWindowScreenState();
+}
+
+Future<void> initializeBackgroundService() async {
+  final service = FlutterBackgroundService();
+
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart, // Make sure you import or define onStart
+      isForegroundMode: true,
+      autoStart: false,
+      notificationChannelId: 'paperclip_monitoring_channel',
+      initialNotificationTitle: 'Paperclip Monitoring',
+      initialNotificationContent: 'Session active. Monitoring for integrity.',
+      foregroundServiceNotificationId: 9999,
+      autoStartOnBoot: false,
+    ),
+    iosConfiguration: IosConfiguration(
+      onBackground: onStart,
+      autoStart: false,
+    ),
+  );
 }
 
 class _OpenWindowScreenState extends State<OpenWindowScreen>
@@ -56,13 +80,33 @@ class _OpenWindowScreenState extends State<OpenWindowScreen>
     WidgetsBinding.instance.addObserver(this);
 
     // Fetch API base URL first, then proceed with analytics fetch and screenshot listener setup
-    _fetchApiBaseUrl().then((url) {
+    _fetchApiBaseUrl().then((url) async {
       if (mounted) {
         // Ensure widget is still mounted before setState
         setState(() {
           _apiBaseUrl = url;
         });
         _fetchAnalytics(); // Fetch analytics once API base URL is available
+
+        final service = FlutterBackgroundService();
+        if (Platform.isAndroid) {
+          final status = await Permission.notification.status;
+          if (!status.isGranted) {
+            print(
+                "Notification permission not granted. Cannot start background service.");
+            // Optionally, show a dialog or handle this gracefully.
+          } else {
+            await initializeBackgroundService();
+            await service.startService();
+            await Future.delayed(const Duration(milliseconds: 500));
+            service.invoke('update', {
+              'lrn': widget.studentLrn,
+              'teacherTable': widget.teacherTableName,
+              'apiBaseUrl': _apiBaseUrl
+            });
+            print('Background service started and updated from session_screen');
+          }
+        }
 
         // Set up screenshot handler only after API base URL is available and once
         if (!_screenshotHandlerSet) {

@@ -1,53 +1,51 @@
-// ignore_for_file: avoid_print, use_build_context_synchronously
+// ignore_for_file: avoid_print, use_build_context_synchronously, deprecated_member_use
 
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:lottie/lottie.dart';
-import 'package:http/http.dart' as http; // Import for HTTP requests
+import 'package:http/http.dart' as http;
+// ignore: unused_import
 import 'package:paperclip_app/background_service_handler.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'dart:convert'; // Import for JSON encoding/decoding
-import 'dart:io'; // Import for Platform
+import 'dart:convert';
+import 'dart:io';
 
 import 'server_offline_screen.dart';
 import 'session_screen.dart';
+import 'ota_update_service.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // ESSENTIAL for plugins to work
+  WidgetsFlutterBinding.ensureInitialized();
 
-  // Request notification permissions for Android 13+ foreground service
-  // This is crucial for the background service to run in foreground mode
+  // Request necessary permissions for Android
   if (Platform.isAndroid) {
-    if (await Permission.notification.isDenied) {
-      await Permission.notification.request();
-    }
+    await _requestPermissions();
   }
 
-  await initializeBackgroundService();
   runApp(const MyApp());
 }
 
-Future<void> initializeBackgroundService() async {
-  final service = FlutterBackgroundService();
+Future<void> _requestPermissions() async {
+  // Request notification permissions
+  final notificationStatus = await Permission.notification.request();
+  if (notificationStatus.isGranted) {
+    print("Notification permission granted!");
+  } else if (notificationStatus.isDenied) {
+    print("Notification permission denied. Foreground service might not work.");
+  } else if (notificationStatus.isPermanentlyDenied) {
+    print(
+        "Notification permission permanently denied. User must enable from settings.");
+    openAppSettings();
+  }
 
-  // Configure the background service
-  await service.configure(
-    androidConfiguration: AndroidConfiguration(
-      onStart: onStart, // The entry point function from background_service_handler.dart
-      isForegroundMode: true, // CRUCIAL: Makes it a foreground service with notification
-      autoStart: false, // We will start it manually after successful login
-      notificationChannelId: 'paperclip_monitoring_channel', // MUST match AndroidManifest.xml
-      initialNotificationTitle: 'Paperclip Monitoring',
-      initialNotificationContent: 'Session active. Monitoring for integrity.',
-      foregroundServiceNotificationId: 888, // Unique ID for the foreground notification
-    ),
-    iosConfiguration: IosConfiguration(
-      onBackground: onStart, // Now compatible as onStart returns Future<bool>
-      autoStart: false,
-      // onForeground: onStart, // You might uncomment this if you want it to run in foreground too
-    ),
-  );
+  // Request other permissions
+  await Permission.ignoreBatteryOptimizations.request();
+
+  // For Android 12+ exact alarm permission
+  if (Platform.isAndroid) {
+    await Permission.scheduleExactAlarm.request();
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -76,18 +74,14 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
-  final TextEditingController _referenceController =
-      TextEditingController(); // For LRN
-  final TextEditingController _accessCodeController =
-      TextEditingController(); // For Password
+  final TextEditingController _referenceController = TextEditingController();
+  final TextEditingController _accessCodeController = TextEditingController();
   late AnimationController _lottieController;
-  bool _isLoading = false; // To show loading state during login
-  String? _errorMessage; // To display login error messages
+  bool _isLoading = false;
+  String? _errorMessage;
+  String? _apiBaseUrl;
 
-  // Base URL for your PHP API endpoints.
-  // IMPORTANT: Replace this with your actual server IP or domain name.
-  // This should be the same base URL as in session_screen.dart.
-  String? _apiBaseUrl; // Now nullable, fetched asynchronously
+  final OtaUpdateService _otaUpdateService = OtaUpdateService();
 
   @override
   void initState() {
@@ -97,20 +91,25 @@ class _LoginScreenState extends State<LoginScreen>
       duration: const Duration(seconds: 3),
     );
 
-    // Fetch API base URL when the widget initializes
     _fetchApiBaseUrl().then((url) {
       if (mounted) {
-        // Ensure widget is still mounted before setState
         setState(() {
           _apiBaseUrl = url;
         });
       }
     });
 
-    // Auto-play the animation when the screen loads
-    _lottieController.forward();
+    _fetchApiBaseUrl().then((url) {
+      if (mounted) {
+        setState(() {
+          _apiBaseUrl = url;
+        });
+        // After API base URL is fetched, check for updates using the service
+        _otaUpdateService.checkForUpdates(context);
+      }
+    });
 
-    // Optional: Loop the animation
+    _lottieController.forward();
     _lottieController.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
         _lottieController.reset();
@@ -119,7 +118,6 @@ class _LoginScreenState extends State<LoginScreen>
     });
   }
 
-  // Method to fetch API base URL from a remote source
   Future<String?> _fetchApiBaseUrl() async {
     try {
       final response = await http.get(
@@ -135,6 +133,27 @@ class _LoginScreenState extends State<LoginScreen>
     return null;
   }
 
+  Future<List<String>> _fetchPossibleTables() async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+            'https://raw.githubusercontent.com/chrispycreeme/paperclip-server-dump/refs/heads/main/allowed_tables'),
+      );
+      if (response.statusCode == 200) {
+        // Split by lines and remove empty lines
+        return response.body
+            .split('\n')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+    } catch (e) {
+      print('Error fetching possible tables: $e');
+    }
+    // Fallback to an empty list if fetch fails
+    return [];
+  }
+
   @override
   void dispose() {
     _referenceController.dispose();
@@ -143,23 +162,12 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  // Helper function to derive teacher_table_name from LRN
-  String? _deriveTeacherTableName(String lrn) {
-    if (lrn.startsWith('S1')) {
-      return 'students_teacher1';
-    } else if (lrn.startsWith('S2')) {
-      return 'students_teacher2';
-    }
-    return null;
-  }
-
-  // Method to handle student login
   Future<void> _loginStudent() async {
-    if (_isLoading) return; // Prevent multiple login attempts
+    if (_isLoading) return;
 
     setState(() {
       _isLoading = true;
-      _errorMessage = null; // Clear previous errors
+      _errorMessage = null;
     });
 
     final lrn = _referenceController.text.trim();
@@ -181,89 +189,102 @@ class _LoginScreenState extends State<LoginScreen>
       return;
     }
 
-    final teacherTableName = _deriveTeacherTableName(lrn);
-    if (teacherTableName == null) {
-      setState(() {
-        _errorMessage = "Invalid LRN format or no associated teacher found.";
-        _isLoading = false;
-      });
-      return;
+    // Fetch possible tables from GitHub
+    final possibleTables = await _fetchPossibleTables();
+
+    bool found = false;
+    for (final teacherTableName in possibleTables) {
+      try {
+        _lottieController.repeat();
+
+        final response = await http.post(
+          Uri.parse('$_apiBaseUrl/student_login.php'),
+          body: {
+            'lrn': lrn,
+            'password': password,
+            'teacher_table_name': teacherTableName,
+          },
+        );
+
+        _lottieController.stop();
+
+        if (response.statusCode == 200) {
+          final Map<String, dynamic> data = json.decode(response.body);
+          if (data['success']) {
+            found = true;
+            final String studentLrn = data['student_lrn'];
+            final String fetchedTeacherTableName = data['teacher_table_name'];
+            final String studentName = data['student_name'];
+
+            final service = FlutterBackgroundService();
+
+            if (Platform.isAndroid) {
+              final status = await Permission.notification.status;
+              if (!status.isGranted) {
+                print(
+                    "Notification permission not granted. Cannot start background service.");
+                _errorMessage =
+                    "Notification permission required to start monitoring service.";
+                setState(() {
+                  _isLoading = false;
+                });
+                return;
+              }
+            }
+
+            try {
+              await service.startService();
+              print('Background service started successfully');
+
+              await Future.delayed(const Duration(milliseconds: 500));
+
+              service.invoke('update', {
+                'lrn': studentLrn,
+                'teacherTable': fetchedTeacherTableName,
+                'apiBaseUrl': _apiBaseUrl
+              });
+              print('Data sent to background service');
+            } catch (e) {
+              print('Error starting background service: $e');
+              _errorMessage =
+                  "Failed to start background monitoring. Please ensure notification permissions are granted.";
+              setState(() {
+                _isLoading = false;
+              });
+              return;
+            }
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => OpenWindowScreen(
+                  studentLrn: studentLrn,
+                  teacherTableName: fetchedTeacherTableName,
+                  studentName: studentName,
+                ),
+              ),
+            );
+            break;
+          }
+        }
+      } catch (e) {
+        print('Login error: $e');
+        setState(() {
+          _errorMessage = "An unexpected error occurred: $e";
+        });
+        break;
+      }
     }
 
-    try {
-      _lottieController.repeat(); // Show loading animation
-
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/student_login.php'),
-        body: {
-          'lrn': lrn,
-          'password': password,
-          'teacher_table_name': teacherTableName,
-        },
-      );
-
-      _lottieController.stop(); // Stop animation after response
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-        if (data['success']) {
-          final String studentLrn = data['student_lrn'];
-          final String fetchedTeacherTableName = data['teacher_table_name'];
-          final String studentName = data['student_name'];
-
-          final service = FlutterBackgroundService();
-          // Start the background service
-          await service.startService();
-
-          // Send update to the background service with necessary data
-          service.invoke('update', {
-            'lrn': studentLrn,
-            'teacherTable': fetchedTeacherTableName,
-            'apiBaseUrl': _apiBaseUrl
-          });
-
-          // Only navigate AFTER background service is started and updated
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => OpenWindowScreen(
-                studentLrn: studentLrn,
-                teacherTableName: fetchedTeacherTableName,
-                studentName: studentName,
-              ),
-            ),
-          );
-        } else {
-          setState(() {
-            _errorMessage = data['message'] ?? "Login failed. Please try again.";
-          });
-        }
-      } else {
-        setState(() {
-          _errorMessage = "Server error: ${response.statusCode}. Please try again later.";
-        });
-      }
-    } on http.ClientException catch (e) {
-      print('HTTP Client Exception: $e');
-      if (mounted) {
-        // Check mounted before navigating
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const ServerOfflineScreen()),
-        );
-      }
-    } catch (e) {
-      print('Login error: $e');
+    if (!found) {
       setState(() {
-        _errorMessage = "An unexpected error occurred: $e";
+        _errorMessage = "Login failed. Please check your LRN and password.";
+        _isLoading = false;
       });
-    } finally {
-      if (mounted) {
-        // Ensure widget is still mounted before setState
-        setState(() {
-          _isLoading = false;
-        });
-      }
+    } else {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
@@ -404,7 +425,8 @@ class _LoginScreenState extends State<LoginScreen>
                     padding: const EdgeInsets.only(top: 16.0),
                     child: Text(
                       _errorMessage!,
-                      style: const TextStyle(color: Colors.redAccent, fontSize: 14),
+                      style: const TextStyle(
+                          color: Colors.redAccent, fontSize: 14),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -412,7 +434,9 @@ class _LoginScreenState extends State<LoginScreen>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _isLoading || _apiBaseUrl == null ? null : _loginStudent,
+                    onPressed: _isLoading || _apiBaseUrl == null
+                        ? null
+                        : _loginStudent,
                     style: ElevatedButton.styleFrom(
                       foregroundColor: const Color(0xFF7B4EFF),
                       backgroundColor: Colors.white,
@@ -422,7 +446,8 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ),
                     child: _isLoading
-                        ? const CircularProgressIndicator(color: Color(0xFF7B4EFF))
+                        ? const CircularProgressIndicator(
+                            color: Color(0xFF7B4EFF))
                         : const Text(
                             'LOG IN',
                             style: TextStyle(
